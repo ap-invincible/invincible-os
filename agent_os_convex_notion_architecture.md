@@ -2,6 +2,8 @@
 
 Supersedes the earlier custom-orchestrator design. Convex now plays the role the "orchestrator + audit log + approval queue" used to play in the previous doc — it isn't bolted on, it *is* the backend.
 
+This doc stays the product-level overview (workflows, requester/approver shape, Convex↔Notion↔Teams integration). For backend security/performance depth, see `backend_architecture.md`. For LLM routing, agent graphs, and everything AI-related, see `intelligence_layer_architecture.md`. All three describe the same system — nothing here should be read as contradicting the other two.
+
 ## 0. Core principle (unchanged, now sharper)
 
 **The LLM translates. Code decides. The agent finishes the work before a human ever sees it.**
@@ -18,9 +20,11 @@ Every request produces a **complete draft outcome** — a flagged/cleared expens
 | External calls to LLM / GitHub / Notion, which are flaky | `Action Retrier` / `Workpool` | Automatic retry with backoff on failed HTTP calls; controlled concurrency so you don't hammer the GitHub API |
 | Live requester + approver dashboards | Convex reactive queries | Both portals subscribe to the same tables; a status change (agent finishes, or approver decides) appears instantly on both screens with zero polling code |
 | Storing uploaded xlsx / vendor brochures | Convex file storage | Upload once, reference by file ID everywhere downstream (extraction, compliance check, audit trail) |
-| Compliance check against a rule set without stuffing it all into a 1.5B model's context | `RAG` component (vector search) | Embed the company rule set once; at request time, retrieve only the 2-3 relevant rules for the brochure's content and hand only those to the LLM |
+| Compliance check against a rule set without stuffing it all into the model's context on every call | `RAG` component (vector search) | Embed the company rule set once; at request time, retrieve only the 2-3 relevant rules for the brochure's content and hand only those to the LLM |
 | Scheduling the monthly expense run | `crons` | Kick off ingestion of the month's xlsx automatically, or on manual upload |
-| Calling the LLM, GitHub, Notion | `actions` | The only place external HTTP calls happen; everything else (extraction result handling, rule evaluation, budget math) is a plain query/mutation |
+| Calling the LLM, GitHub, Notion, Teams | `actions` | The only place external HTTP calls happen; everything else (extraction result handling, rule evaluation, budget math) is a plain query/mutation |
+
+**Teams notifications (added):** a Convex action posts an Adaptive Card to a Teams channel via a Workflow-generated webhook URL (Teams → channel → Workflows → "Post to a channel when a webhook request is received" — no Azure Bot Framework registration needed) on key milestones: submitted, flagged, approved, executed. The card carries a plain link back to the request's page on the dashboard — it does not include an interactive submit action. Real Approve/Reject buttons inside Teams would require full bot registration, which defeats the point; the dashboard (with the live trace) stays the one place decisions are made and logged, so the audit trail never has to reconcile two sources of truth.
 
 This table is the actual answer to "use Convex wherever it improves performance or reduces effort" — each row is a specific piece of custom infrastructure the earlier design would have needed you to hand-build, that Convex gives you for free.
 
@@ -172,7 +176,7 @@ Both portals are the same Convex app reading different table slices — no separ
 
 **Autonomous pipeline:**
 1. Brochure → Convex file storage → text extracted → chunked and embedded (or embedded once if it's a known recurring vendor).
-2. **Compliance check (RAG, not brute-force context stuffing):** vector search the brochure content against `company_rules`; take the top few matching rules; single narrow LLM call: "does this brochure violate this rule — yes/no/uncertain — one sentence why." This is the "greater compute/effort" case Convex's RAG component is built for — you're not asking a 1.5B model to hold your whole rulebook in its head.
+2. **Compliance check (RAG, not brute-force context stuffing):** vector search the brochure content against `company_rules`; take the top few matching rules; single narrow LLM call: "does this brochure violate this rule — yes/no/uncertain — one sentence why." This is the "greater compute/effort" case Convex's RAG component is built for — you're not asking the model to hold your whole rulebook in its head on every call.
 3. **Budget check (pure Convex query, no LLM):** `leftover = department.monthlyBudget − sum(expense_items.amount WHERE department AND month = current)`, pulled from the same data ingested in Agent 1. `budgetCovered = estimatedCost <= leftover`.
 4. **Gate:** forward to Approver UI **only if** `complianceVerdict != "violation"` **and** `budgetCovered == true`. Otherwise, auto-reject with the specific reason (budget insufficient / rule violated) — requester sees this immediately, no approver involved. *(This mirrors the budget-gating rule you specified; I've applied the same all-or-nothing gate to compliance for consistency — flag this if you'd rather compliance violations still reach a human for override.)*
 
@@ -182,9 +186,13 @@ Both portals are the same Convex app reading different table slices — no separ
 
 ---
 
-## 7. LLM hosting
+## 7. LLM access (updated — OpenRouter, no more self-hosting)
 
-Keep Qwen2.5-1.5B; move where it runs, not what it is. Host it behind a stable HTTPS endpoint (small always-on VM running Ollama/vLLM, or a serverless GPU function) and have Convex actions call that URL. This removes your laptop as a bottleneck and keeps the "seamless" property — the rest of the system only ever sees an HTTP endpoint, it doesn't care where it lives. Every prompt in this design stays short and single-purpose (per the earlier context-management rules — one call, one job, JSON-schema-validated output, retry-once-then-escalate-to-human on failure) — that discipline matters more for reliability than the raw hosting speed does.
+No more self-hosted model, no more endpoint to keep alive — OpenRouter is a managed gateway (`https://openrouter.ai/api/v1`, OpenAI-compatible) that Convex Node actions call directly. That removes the entire "host Qwen somewhere fast" problem from §7 as it existed before; there's no VM, no Ollama/vLLM process, no laptop bottleneck to design around anymore.
+
+Model is now GPT-4.1-class (configured centrally, swappable in one place — see `intelligence_layer_architecture.md` §2 for the exact routing/fallback setup). One honest note: OpenRouter's genuinely-free models are rotating open-weight models with real rate limits (20 req/min, low daily caps) — not GPT-4.1 itself. For a system where requests arrive unpredictably and gate real approvals, the primary path should run on paid pay-as-you-go credits; cost stays small because of the next paragraph, not because the model is free.
+
+**What doesn't change, and this is the important part:** a bigger, smarter, hosted model does not mean the LLM's share of the decision grows. Every rule from the original design still holds — one call, one job, JSON-schema-validated output, retry-once-then-escalate-to-human on failure, extract/classify/draft only, never compute or decide. Extended context and model quality make each narrow call more *reliable*, not more *load-bearing*. Full discipline, token budgets, and guardrails are in `intelligence_layer_architecture.md`.
 
 ---
 

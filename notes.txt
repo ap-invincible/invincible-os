@@ -1,0 +1,27 @@
+Each agent must also have its own requester and approver interface.
+Also, the agents must do the assigned work autonomously when a request is made and then the requester has to do nothing more than review the changes made, edit them (if needed at all) and approve the agents' work.
+
+1. Expense/invoice anomaly detection
+Finance agent reviews submitted expenses/invoices, flags anomalies (duplicate, over-category-average, missing PO), routes flagged ones to a human, auto-clears the rest with logged reasoning.
+This is one of the most common real deployments right now: Finance teams can use AI Agents to validate invoices, detect expense anomalies, generate monthly reports, reconcile payments, and trigger approval workflows.
+These expenses data will be provided in desired columns/labels in a table in invincible_expenses_july26.xlsx
+
+2. New-hire provisioning (HR + Engineering)
+HR agent confirms a new hire's start date and role; Engineering agent proposes system/access provisioning based on role template. Sensitive access (admin, prod, finance systems) requires human approval before Engineering agent executes; routine access (email, Slack) can auto-provision with the action still logged.
+The requester portal will ask for the user's email address and github username, then require approval to provide github repo access. Once, the request is approved by admin, the agent should autonomously provide the github repo's access to the username provided by the requester.
+
+3. Vendor/tool procurement request
+Any department agent requests a new SaaS tool or vendor; Finance agent checks against budget + a vendor-risk policy (e.g., data-handling category, spend tier); flags contracts needing
+legal/security review. Human approves new vendor relationships.
+This agent will be responsible to analyze the vendor's brochure  and make sure it doesn't violate any of our company's rule(this rule set will be provided by us only).
+This agent will also be responsible to check our monthly budget quota left by analyzing invincible_expenses_july26.xlsx by calculating leftover monthly quota = (the difference between all the expenses already made in the month v/s total budget). Then, the agent will only forward the request to admin/approver portal only if the vendor's costing/demand can be covered by leftover monthly quota
+
+
+
+
+###BONUS###
+Engineering infra/cloud spend request
+Engineering agent requests additional cloud budget (e.g., "need $2k more for staging GPU instances"); Finance agent checks against the infra budget line and burn rate; auto-approves under
+threshold, escalates above it. Good if you want Engineering as one of your 2-3 deep functions instead of Marketing.
+
+
